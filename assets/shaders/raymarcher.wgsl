@@ -7,6 +7,20 @@ type f2 = vec2<f32>;
 type f3 = vec3<f32>;
 type i2 = vec2<i32>;
 
+var<private> shapes: array<f3,8> = array<f3,8>
+    (
+    vec3<f32>(0.5, 0.5, 0.2), 
+    vec3<f32>(0.2, 0.2, 0.2), 
+    vec3<f32>(-0.5, -0.5, 0.2), 
+    vec3<f32>(-0.5, 0.5, 0.2),
+    vec3<f32>(0.5, -0.5, 0.2), 
+    vec3<f32>(-0.2, -0.3, 0.3), 
+    vec3<f32>(-0.5, -0.7, 0.3), 
+    vec3<f32>(0.5, -0.7, 0.2)
+    );
+
+var<private> shape_index: u32 = 8u;
+
 @compute @workgroup_size(8, 8, 1)
 fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
     let location = vec2<i32>(i32(invocation_id.x), i32(invocation_id.y));
@@ -15,39 +29,34 @@ fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_wo
     textureStore(texture, location, color);
 }
 
-fn circle_sdf(p: f2, center: f2, r: f32) -> f32 
+fn circle_sdf(p: f2, c: f3) -> f32 
 {
-    return length(p-center)-r;
+    return length(p-c.xy)-c.z;
+}
+
+fn min_df(p: f2) -> f32 {
+    var min: f32 = 999999999.9;
+    for(var i = 0u; i < shape_index; i++) {
+        let a = shapes[i];
+        min = min(min, circle_sdf(p, a));
+    }
+    return min;
 }
 
 fn scene_sdf(p: vec2<f32>) -> f32 {
-    let s = circle_sdf(p, f2(0.5), 0.2);
-    let s2 = circle_sdf(p, f2(0.2), 0.2);
-    let s3 = circle_sdf(p, f2(-0.5), .83);
-    let s4 = circle_sdf(p, f2(-0.5, 0.5), 0.2);
-
-    let dist = min(min(min(s, s2), s3), s4);
-    
-    return dist;
+    return min_df(p);
 }
 
 fn scene_index(p: f2) -> i32 {
-    let s = circle_sdf(p, f2(0.5), 0.2);
-    let s2 = circle_sdf(p, f2(0.2), 0.2);
-    let s3 = circle_sdf(p, f2(-0.5), .83);
-    let s4 = circle_sdf(p, f2(-0.5, 0.5), 0.2);
+    let min = min_df(p);
 
-    let dist = min(min(min(s, s2), s3), s4);
-
-    if dist == s {
-        return 0;
-    } else if dist == s2 {
-        return 1;
-    } else if dist == s3 {
-        return 2;
-    } else if dist == s4 {
-        return 3;
+    for(var i = 0; i < i32(shape_index); i++) {
+        let a = shapes[i];
+        if(min == circle_sdf(p, a)) {
+            return i;
+        }
     }
+
     return -1;
 }
 
@@ -80,6 +89,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let residual = abs(max_len - d0);
     if(residual < 0.01) {
         color = f3(sin(residual*100.));
+        color = mix(color, f3(dir.x, dir.y, dir.x), residual*100.);
     } else {
         color = f3(0.1375);
     }
@@ -89,6 +99,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     if (a == b && a != -1 && scene_sdf(pixel_point) < 0.0 && scene_sdf(origin) < 0.0) {
         let n = abs(scene_sdf(pixel_point));
         color = f3(n);
+        color = mix(color, f3(tan(time), cos(time), sinh(time)), residual*100.);
     }
 
     if (max_len < 0.04) {
