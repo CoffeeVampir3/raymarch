@@ -2,6 +2,8 @@
 var texture: texture_storage_2d<rgba8unorm, read_write>;
 @group(0) @binding(1)
 var<uniform> time: f32;
+@group(0) @binding(2)
+var<uniform> player_input: vec2<f32>;
 
 type f2 = vec2<f32>;
 type f3 = vec3<f32>;
@@ -66,18 +68,17 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let res = f2(1280., 720.);
 
     let coord = vec2<f32>(invocation_id.xy);
-    let origin = f2(sin(time)/1.67, cos(time*3.9)/2.1);
     let aspect = res.x/res.y;
 
     var pixel_point: vec2<f32> = f2((2.0*coord-res.xy)/res.y);
 
-    let dir = normalize(pixel_point - origin);
-    let max_len = length(pixel_point - origin);
+    let dir = normalize(pixel_point - player_input);
+    let max_len = length(pixel_point - player_input);
 
     var d0 = 0.0;
     var k = 0.0;
     for(var i = 0; i < 100; i++) {
-        let p = origin + d0 * dir;
+        let p = player_input + d0 * dir;
         k = scene_sdf(p);
         d0 += k;
         if k < 0.001 {
@@ -86,21 +87,6 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     }
 
     var color: f3;
-    let residual = abs(max_len - d0);
-    if(residual < 0.01) {
-        color = f3(sin(residual*100.));
-        color = mix(color, f3(dir.x, dir.y, dir.x), residual*100.);
-    } else {
-        color = f3(0.1375);
-    }
-
-    let a = scene_index(origin);
-    let b = scene_index(pixel_point);
-    if (a == b && a != -1 && scene_sdf(pixel_point) < 0.0 && scene_sdf(origin) < 0.0) {
-        let n = abs(scene_sdf(pixel_point));
-        color = f3(n);
-        color = mix(color, f3(tan(time), cos(time), sinh(time)), residual*100.);
-    }
 
     if (max_len < 0.04) {
         color = f3(1.0);

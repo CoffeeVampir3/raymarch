@@ -15,7 +15,7 @@ use bevy::{
     },
     window::{WindowPlugin, WindowResized},
 };
-use std::{borrow::Cow};
+use std::{borrow::{Cow}};
 
 const SIZE: (u32, u32) = (1280, 720);
 const WORKGROUP_SIZE: u32 = 8;
@@ -33,7 +33,7 @@ fn main() {
         }))
         .add_plugin(GameOfLifeComputePlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, on_window_resize)
+        .add_systems(Update, (on_window_resize, handle_input))
         .run();
 }
 
@@ -46,6 +46,25 @@ fn on_window_resize(
         let res = Vec2::new(ev.width, ev.height);
         b.custom_size = Some(res);
     }
+}
+
+fn handle_input(
+    mut goli: ResMut<PlayerData>,
+    keys: Res<Input<KeyCode>>,
+) {
+    let mut move_dir = Vec2::ZERO;
+    for key in keys.get_just_pressed() {
+        match key {
+            KeyCode::W => move_dir = Vec2::new(0.0, -1.0),
+            KeyCode::S => move_dir = Vec2::new(0.0, 1.0),
+            KeyCode::A => move_dir = Vec2::new(-1.0, 0.0),
+            KeyCode::D => move_dir = Vec2::new(1.0, 0.0),
+            _ => {}
+        }
+        println!("{:?}", move_dir);
+    }
+    let prev = *goli.player_position.get();
+    goli.player_position.set(prev + move_dir * 0.1);
 }
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, render_device: Res<RenderDevice>,) {
@@ -63,12 +82,14 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, render_devic
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let image = images.add(image);
 
-    let buffer = render_device.create_buffer_with_data(&BufferInitDescriptor 
+    let time_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor 
         { 
             label: None, 
-            contents: &(0.0_f32).to_le_bytes(), 
+            contents: bytemuck::bytes_of(&0_0f32), 
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST }
         );
+
+    let player_pos = encase::UniformBuffer::from(Vec2::ZERO);
 
     commands.spawn(SpriteBundle {
         sprite: Sprite {
@@ -80,7 +101,8 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, render_devic
     });
     commands.spawn(Camera2dBundle::default());
 
-    commands.insert_resource(GameOfLifeImage(image, buffer));
+    commands.insert_resource(GameOfLifeImage{image, time:time_buffer});
+    commands.insert_resource(PlayerData{player_position: player_pos})
 }
 
 pub struct GameOfLifeComputePlugin;
@@ -105,10 +127,15 @@ impl Plugin for GameOfLifeComputePlugin {
 }
 
 #[derive(Resource, Clone, ExtractResource)]
-struct GameOfLifeImage(
-    Handle<Image>,
-    Buffer,
-);
+struct GameOfLifeImage{
+    image: Handle<Image>,
+    time: Buffer,
+}
+
+#[derive(Resource)]
+struct PlayerData {
+    player_position: UniformBuffer<Vec2>,
+}
 
 #[derive(Resource)]
 struct GameOfLifeImageBindGroup(BindGroup);
@@ -118,12 +145,15 @@ fn queue_bind_group(
     pipeline: Res<GameOfLifePipeline>,
     gpu_images: Res<RenderAssets<Image>>,
     game_of_life_image: Res<GameOfLifeImage>,
+    mut player_data: ResMut<PlayerData>,
     time: Res<Time>,
     render_device: Res<RenderDevice>,
-    rq: Res<RenderQueue>
+    rq: Res<RenderQueue>,
 ) {
-    let view = &gpu_images[&game_of_life_image.0];
-    rq.write_buffer(&game_of_life_image.1, 0, bevy::core::cast_slice(&[time.elapsed_seconds_wrapped()]));
+    let view = &gpu_images[&game_of_life_image.image];
+    rq.write_buffer(&game_of_life_image.time, 0, bevy::core::cast_slice(&[time.elapsed_seconds_wrapped()]));
+
+    player_data.player_position.write_buffer(&render_device, &rq);
 
     //render_device.map_buffer(buffer, MapMode::Write, callback);
     let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
@@ -135,7 +165,11 @@ fn queue_bind_group(
         },
         BindGroupEntry {
             binding: 1,
-            resource: BindingResource::Buffer(game_of_life_image.1.as_entire_buffer_binding()),
+            resource: BindingResource::Buffer(game_of_life_image.time.as_entire_buffer_binding()),
+        },
+        BindGroupEntry {
+            binding: 2,
+            resource: player_data.player_position.binding().unwrap(),
         }],
     });
     commands.insert_resource(GameOfLifeImageBindGroup(bind_group));
@@ -167,6 +201,15 @@ impl FromWorld for GameOfLifePipeline {
                     },
                     BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer { 
+                            ty: BufferBindingType::Uniform, 
+                            has_dynamic_offset: false, 
+                            min_binding_size: None },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 2,
                         visibility: ShaderStages::COMPUTE,
                         ty: BindingType::Buffer { 
                             ty: BufferBindingType::Uniform, 
